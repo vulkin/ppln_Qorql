@@ -1,0 +1,171 @@
+Prediction Pipeline
+----------------------------------
+Requirements->
+
+1.Boost 1.58
+>> Download boost source code.
+>> Extract it and goto that folder
+>> ./bootstrap.sh --with-libraries=atomic,date_time,exception,filesystem,iostreams,locale,program_options,regex,signals,system,test,thread,timer,log
+>> sudo ./b2 install
+
+2.OpenCV 
+3.MongoDb
+
+-------------------------------------
+Data Structure->
+
+Vocabulary (per doctor)
+
+1.Look up Table- This table contains mapping of every class to a unique number given to that.
+map<int,string>
+
+2.Neural Network object- It is read from xml file 
+CvANN_MLP mlp.load(URL_OF_XML,"mlp"); 
+
+3.Storage of all Prescription's URL of  doctor at Process level.
+vector<Prescription>  
+
+----------------------------------------
+Design of classes->
+
+Process.cpp
+	$ It is main file that is called by the orchestrator with the list of Doctor Id's.
+	$ Thread Pool and MongoDb Connection Pool are declared here.
+	$ It calls Doc_bock internally one by one for every doctor.
+
+Doc_block.hpp
+	$ class DocBlockTesting
+	$ loadDoctorVocab() - Will invoke the vocabulary
+	$ MAIN_WORK() - Call threads from threadpool(tasks are posted onto the threadpool in this method)
+	$ Thread_function() - Is called for every threads by threadpool. It is responsible for multi threading pipeline. 
+
+ThreadCall.hpp
+	$ Call by Thread_function() in DocBlockTesting Class
+	$ READ_URL()- Fetches Image form its URL and store it in MAT
+	$ IP_BLOCK()-  It contains all the classes called by image processing block
+
+Prescription.hpp
+	$ Contains Doctorid and AWS URL of that prescription 
+	$ show_prescription() - If no file name is given as parameters then it will display 
+		in terminal else it would display in file
+	$ Get_URL() - returns AWS URL of that prescription
+	$ Get_DOC() - returns Doctor ID 
+
+Word.hpp
+	$ Contains word class.
+
+//Features folder
+Features.hpp
+	$ Contains list of features
+
+
+//Filtering folder
+filter_bank.hpp
+	$ Contains all filters
+
+//Neural_Network folder
+NN_Design.hpp
+	$ Contains Wrapper class for neural network.
+	$ function to Predict using the neural network.
+
+//Scissoring Folder
+Scissoring.hpp
+	$ Contains method for Scissoring Prescriptions.
+
+Cropping.hpp
+	$ Contains method to crop Image.
+
+Straightening.hpp
+	$ Contains method for Image Straightening.			
+
+	
+//Libs Folder	
+
+Recoginzed.hpp
+	$ Contains detail about recognized words
+
+Unrecognized.hpp
+	$ Contains detail about unrecognized words		
+
+ThreadPool.hpp
+	$ Contains method for creation, execution and termination of threadpool using boost::asio-- asynch io service.
+
+semaphore.hpp
+	$ Contains method for sync of main thread till all child threads are not returned back to thread pool.	 
+
+
+
+------------------------------------------
+
+Process and Threading Model->
+
+	$ Orchrestrator will call K Processes and every process will create T Threads in the threadpool.(we have K=1 set for now.)
+	$ ThreadPool would be invoked at the time of Process Initilization ( that is in Process.cpp ).
+	$ Threads from thread pool are called for every prescription within a particular doctor block.
+	$ Semaphore is made, which will pause main thread till all the threads are not back to thread pool.
+	$ Initially count of semaphore is updated to total number of precriptions.
+	$ When ever a prescription is over it would reduce the count and will notify main thread to check on waiting condition.
+	$ Waiting condition would be over when all Prescriptions are processed( ie. count=0 ).
+	$ When waiting time is over main thread would leave Doctor Block and would go to process block for next doctor. 
+	$ This cycle will continue till last doctor's processing is not over.
+	$ After it is done threadpool is destroyed.
+
+
+-----------------------------------------------
+
+Work Flow->
+
+	$ Orchrestrator would call K Processes and every process would call Process.cpp with some N number of doctors.
+	$ At process level, threadpool of T thread and connection pool of mongodb are invoked.(for now we are doing loading everything from disk, not mongodb)
+	$ For every Doctor, the prescriptions are loaded.
+	$ For every doctor, DocBlockTesting Class is called with some parameters. 
+	(Details of these parameters are given above that function call).
+	$ At Doctors Block vocabulary of that doctor is loaded in some data structures.
+	Details of these Data Structures are given in Data Structure block.
+	$ Then every Prescription gets one thread from thread pool and calls Thread_function()
+	in Doc_block.hpp with some parameters.
+	$ In Thread_Function(), ThreadBlock is called .
+	$ Every thread in threadblock would first read image from given URL(from AWS S3). (for now images being read from disk)
+	 and will store it in Mat data structure.
+	$ the Mat object is then send to ImageProcessing Block(as shown in figure TrainingBlock.jpg).
+	$ Working of Image Processing block is described later.
+	$ Output of Image Processing block is vector of Word which will contain tags ("-1" for Unrecognized).
+	$ Then Words will be seperated on the basis tags associated with it. If tag is "-1" then it is dumped in Unrecognized bin along with its Prescription details
+	else it would be dumped in Recognized block with its Prescription and Tag datails.
+	$ After all prescriptions of one doctor is over then another doctor's prescription is send for execution.
+	$ This will continue till all Doctors are processed and after that connection pool and ThreadPool are destroyed.
+
+Image Processing WorkFlow->
+
+	$ Image would be sent to Filter bank where noise will be removed and it will return black and white noise free Image.
+	$ Then that Image would be sent to Scissoring and Post Processing Block where cropping , straightening and then again cropping of scissored Image takes place.
+	$ Then vector of Image would be sent of feature extraction and then to Neural Network Recognizer.
+	$ Recognized Image would be sent to recognized bin with their Tags.
+	$ Unrecognized Image would be sent to unrecognized bin from where it would be sent for mannual tagging.
+	$ Details can be seen in IP_trainingBlock.jpg.
+
+
+-----------------------------------------------
+
+Data Storage->
+
+Vocabulary->
+	
+	-Array of Array of String- LookUpTable where every string is mapped with some interger.
+	-xml file storing the weights and other meta data of the trained neural network.
+
+Prescription->
+	String- Doctor id
+	String - URL
+
+Recognized Image->
+	String - Doctor Id
+	String - URL
+	String - Tags
+
+Unrecognized Image->
+	String - Doctor Id
+	String - URL
+
+-------------------------------------------------------------
+
